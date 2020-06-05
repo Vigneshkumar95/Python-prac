@@ -1,0 +1,342 @@
+!conda install -c conda-forge beautifulsoup4 --yes
+
+!conda install -c conda-forge geopy --yes
+
+!conda install -c conda-forge folium=0.5.0 --yes
+
+print('Libraries installed!')
+import numpy as np
+import pandas as pd
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
+
+import requests
+import json
+
+from bs4 import BeautifulSoup
+
+from geopy.geocoders import Nominatim
+
+import folium
+%matplotlib inline
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as colors
+
+from sklearn.preprocessing import StandardScaler, normalize, scale
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.decomposition import PCA
+from sklearn.metrics import mean_squared_error, r2_score
+
+print('Libraries imported!')
+
+# Using Beautiful Soup to parse the website's html
+data = requests.get('https://www.cityrealty.com/nyc/market-insight/features/get-to-know/average-nyc-condo-prices-neighborhood-june-2018/18804').text
+soup = BeautifulSoup(data, 'html.parser')
+
+# Scrap the website tables for average prices
+areaList = []
+neighborhoodList = []
+
+for area in soup.find_all("div", class_="tile _quote _n1 _last"):
+    areaText = area.find("a").text
+    areaList.append(areaText)
+    
+for index, table in enumerate(soup.find_all("table", class_="table table-bordered table-hover table-condensed")):
+    for row in table.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) > 0:
+            neighborhoodName = cells[0].find("a").text.strip()
+            avgPrice = cells[3].text.lstrip("$").strip()
+            if "K" in avgPrice:
+                avgPrice = float(avgPrice.rstrip("K")) * 1000
+            else: 
+                if "M" in avgPrice:
+                    avgPrice = float(avgPrice.rstrip("M")) * 1000000
+            
+            neighborhoodList.append((
+                areaList[index],
+                neighborhoodName,
+                avgPrice
+            ))
+# Put the scrapped data into a dataframe
+nyc_neighborhoods_df = pd.DataFrame(neighborhoodList)
+nyc_neighborhoods_df.columns = ['Area', 'Neighborhood', 'AvgPrice']
+
+
+print(nyc_neighborhoods_df.shape)
+nyc_neighborhoods_df.head()
+
+# Download the geodata
+!wget -q -O 'nyc_geo.json' https://ibm.box.com/shared/static/fbpwbovar7lf8p5sgddm06cgipa2rxpe.json
+print('Data downloaded!')
+
+
+# Load the json file
+with open('nyc_geo.json') as nyc_geo_json:
+    nyc_geo_data = json.load(nyc_geo_json)
+    
+# Get the neighborhoods list
+nyc_geo_list = nyc_geo_data['features']
+
+# Sample neighborhood node
+nyc_geo_list[0]
+
+# Parse the json data into neighborhoods list
+neighborhood_geo_list = []
+for data in nyc_geo_list:
+    borough = neighborhood_name = data['properties']['borough'] 
+    neighborhood_name = data['properties']['name']
+        
+    neighborhood_latlon = data['geometry']['coordinates']
+    neighborhood_lat = neighborhood_latlon[1]
+    neighborhood_lon = neighborhood_latlon[0]
+    
+    neighborhood_geo_list.append((
+        borough, neighborhood_name, neighborhood_lat, neighborhood_lon
+    ))
+    
+# Put into a dataframe
+neighborhood_geo_df = pd.DataFrame(neighborhood_geo_list)
+neighborhood_geo_df.columns = ['Borough', 'Neighborhood', 'Latitude', 'Longitude']
+
+# Avg price data is only available for Manhattan and Brooklyn
+neighborhood_geo_df = neighborhood_geo_df[(neighborhood_geo_df['Borough'] == 'Manhattan') | (neighborhood_geo_df['Borough'] == 'Brooklyn')]
+
+neighborhood_geo_df.reset_index(drop=True, inplace=True)
+
+print(neighborhood_geo_df.shape)
+neighborhood_geo_df.head()
+
+# Bedford Stuyvesant missing a '-' in the middle
+neighborhood_geo_df.at[18, 'Neighborhood'] = 'Bedford-Stuyvesant'
+
+# Downtown is Downtown Brooklyn
+neighborhood_geo_df.at[41, 'Neighborhood'] = 'Downtown Brooklyn'
+
+# Dumbo should be DUMBO
+neighborhood_geo_df.at[104, 'Neighborhood'] = 'DUMBO'
+
+# Prospect Lefferts Gardens missing a '-' in the middle
+nyc_neighborhoods_df.at[15, 'Neighborhood'] = 'Prospect-Lefferts Gardens'
+neighborhood_geo_df.at[43, 'Neighborhood'] = 'Prospect-Lefferts Gardens'
+
+# South Slope - Greenwood Heights is just South Slope
+nyc_neighborhoods_df.at[17, 'Neighborhood'] = 'South Slope'
+# South Slope coordinates is missing
+neighborhood_geo_df = neighborhood_geo_df.append({'Borough': 'Brooklyn',
+                                                  'Neighborhood': 'South Slope',
+                                                  'Latitude': 40.662349, 
+                                                  'Longitude': -73.990350}, ignore_index=True)
+
+# Park, Fifth Ave to 79th St is Upper East Side
+nyc_neighborhoods_df.at[24, 'Neighborhood'] = 'Upper East Side'
+
+# Flatiron/Union Square is just Flatiron
+nyc_neighborhoods_df.at[29, 'Neighborhood'] = 'Flatiron District'
+neighborhood_geo_df.at[99, 'Neighborhood'] = 'Flatiron District'
+
+# Gramercy Park is just Gramercy
+nyc_neighborhoods_df.at[30, 'Neighborhood'] = 'Gramercy'
+# NOHO should be just NoHo
+nyc_neighborhoods_df.at[33, 'Neighborhood'] = 'NoHo'
+neighborhood_geo_df.at[88, 'Neighborhood'] = 'NoHo'
+
+# NoLiTa/Little Italy is just NoLiTa
+nyc_neighborhoods_df.at[34, 'Neighborhood'] = 'NoLiTa'
+neighborhood_geo_df.at[76, 'Neighborhood'] = 'NoLiTa'
+
+# SOHO should be just SoHo
+nyc_neighborhoods_df.at[35, 'Neighborhood'] = 'SoHo'
+neighborhood_geo_df.at[77, 'Neighborhood'] = 'SoHo'
+
+# Stuyvesant Town / PCV is just Stuyvesant Town
+nyc_neighborhoods_df.at[36, 'Neighborhood'] = 'Stuyvesant Town'
+
+# Beekman/Sutton Place is just Sutton Place
+nyc_neighborhoods_df.at[39, 'Neighborhood'] = 'Sutton Place'
+
+# Midtown East and Midtown West will be combined into Midtown
+nyc_neighborhoods_df.at[40, 'Neighborhood'] = 'Midtown'
+midtown_avg = (nyc_neighborhoods_df.at[40, 'AvgPrice'] + nyc_neighborhoods_df.at[41, 'AvgPrice']) / 2
+nyc_neighborhoods_df.at[40, 'AvgPrice'] = midtown_avg
+nyc_neighborhoods_df.at[41, 'AvgPrice'] = '-'
+
+# Turtle Bay/United Nations is just Turtle Bay
+nyc_neighborhoods_df.at[43, 'Neighborhood'] = 'Turtle Bay'
+
+# Central Harlem is Harlem
+neighborhood_geo_df.at[60, 'Neighborhood'] = 'Harlem'
+
+# Lincoln Center is Lincoln Square
+nyc_neighborhoods_df.at[51, 'Neighborhood'] = 'Lincoln Square'
+# Broadway Cooridor, Central Park West and Riverside Dr./West End Ave. will be combined to Upper West Side
+nyc_neighborhoods_df.at[49, 'Neighborhood'] = 'Upper West Side'
+midtown_avg = (nyc_neighborhoods_df.at[49, 'AvgPrice'] + nyc_neighborhoods_df.at[50, 'AvgPrice'] + nyc_neighborhoods_df.at[53, 'AvgPrice']) / 3
+nyc_neighborhoods_df.at[49, 'AvgPrice'] = midtown_avg
+nyc_neighborhoods_df.at[50, 'AvgPrice'] = '-'
+nyc_neighborhoods_df.at[53, 'AvgPrice'] = '-'
+
+# Drop the Red Hook row
+nyc_neighborhoods_df.drop([16], inplace=True)
+
+# Inner join the two dataframes by Neighborhoods
+nyc_neighborhood_price_df = pd.concat([nyc_neighborhoods_df.set_index('Neighborhood'), neighborhood_geo_df.set_index('Neighborhood')], axis=1, join='inner')
+nyc_neighborhood_price_df.drop(columns=['Area', 'Borough'], inplace=True)
+nyc_neighborhood_price_df.reset_index(inplace=True)
+
+# The joined dataframe
+print(nyc_neighborhood_price_df.shape)
+nyc_neighborhood_price_df.head()
+
+# for choropleth map, we need another geo data which contain the Polygon type Coordinates
+!wget -q -O 'nyc_geo.geojson' http://data.beta.nyc//dataset/0ff93d2d-90ba-457c-9f7e-39e47bf2ac5f/resource/35dd04fb-81b3-479b-a074-a27a37888ce7/download/d085e2f8d0b54d4590b1e7d1f35594c1pediacitiesnycneighborhoods.geojson
+print('Data downloaded!')
+
+nyc_polygon_geo_data = r'nyc_geo.geojson'
+latitude = 40.8021285
+longitude = -73.9777254
+
+# Map without markers
+
+# create a plain world map
+nyc_map = folium.Map(location=[latitude, longitude], zoom_start=11)
+
+# generate choropleth map
+nyc_map.choropleth(
+    geo_data=nyc_polygon_geo_data,
+    data=nyc_neighborhood_price_df,
+    columns=['Neighborhood', 'AvgPrice'],
+    key_on='feature.properties.neighborhood',
+    fill_color='YlOrRd', 
+    fill_opacity=0.7, 
+    line_opacity=0.2,
+    legend_name='Average 2 bedrooms condo price in New York city'
+)
+
+# display map
+nyc_map
+
+# Map with markers
+
+# create a plain world map
+nyc_map = folium.Map(location=[latitude, longitude], zoom_start=11)
+
+# generate choropleth map
+nyc_map.choropleth(
+    geo_data=nyc_polygon_geo_data,
+    data=nyc_neighborhood_price_df,
+    columns=['Neighborhood', 'AvgPrice'],
+    key_on='feature.properties.neighborhood',
+    fill_color='YlOrRd', 
+    fill_opacity=0.7, 
+    line_opacity=0.2,
+    legend_name='Average 2 bedrooms condo price in New York city'
+)
+
+# add markers to map
+for lat, lng, neighborhood, price in zip(nyc_neighborhood_price_df['Latitude'], nyc_neighborhood_price_df['Longitude'], nyc_neighborhood_price_df['Neighborhood'], nyc_neighborhood_price_df['AvgPrice']):
+    label = '{}, ${:3.0f}'.format(neighborhood, price)
+    label = folium.Popup(label, parse_html=True)
+    folium.CircleMarker(
+        [lat, lng],
+        radius=5,
+        popup=label,
+        color='blue',
+        fill=True,
+        fill_color='#3186cc',
+        fill_opacity=0.7,
+        parse_html=False).add_to(nyc_map)
+
+# display map
+nyc_map
+
+# FourSquare parameters
+radius = 1000 # 1 km around the neighborhood center
+limit = 200
+
+venues = []
+
+for lat, long, neighborhood in zip(nyc_neighborhood_price_df['Latitude'], nyc_neighborhood_price_df['Longitude'], nyc_neighborhood_price_df['Neighborhood']):
+    url = "https://api.foursquare.com/v2/venues/explore?client_id={}&client_secret={}&v={}&ll={},{}&radius={}&limit={}".format(
+        CLIENT_ID,
+        CLIENT_SECRET,
+        VERSION,
+        lat,
+        long,
+        radius, 
+        limit)
+    
+    results = requests.get(url).json()["response"]['groups'][0]['items']
+    
+    for venue in results:
+        venues.append((
+            neighborhood,
+            lat, 
+            long, 
+            venue['venue']['name'], 
+            venue['venue']['location']['lat'], 
+            venue['venue']['location']['lng'],  
+            venue['venue']['categories'][0]['name']))
+
+
+# put the venues into a dataframe
+venues_df = pd.DataFrame(venues)
+venues_df.columns = ['Neighborhood', 'Latitude', 'Longitude', 'VenueName', 'VenueLatitude', 'VenueLongitude', 'VenueType']
+
+# check the dataframe
+print(venues_df.shape)
+print('There are {} unique venue types.'.format(len(venues_df['VenueType'].unique())))
+venues_df.head()
+
+# one hot encoding
+venues_type_onehot = pd.get_dummies(venues_df[['VenueType']], prefix="", prefix_sep="")
+
+# add the neighborhood column
+venues_type_onehot['Neighborhood'] = venues_df['Neighborhood']
+fix_columns = list(venues_type_onehot.columns[-1:]) + list(venues_type_onehot.columns[:-1])
+venues_type_onehot = venues_type_onehot[fix_columns]
+
+print(venues_type_onehot.shape)
+venues_type_onehot.head()
+
+# get the occurrence of each venue type in each neighborhood
+venue_count_df = venues_type_onehot.groupby(['Neighborhood']).sum().reset_index()
+
+print(venue_count_df.shape)
+venue_count_df.head()
+
+# get the standardized neighborhoods' average prices
+scaler = StandardScaler()
+standardized_price = scaler.fit_transform(nyc_neighborhood_price_df[['AvgPrice']])
+
+# add the normalized price to the dataframe
+neighborhood_venues_withprice_df = pd.DataFrame(venue_count_df)
+neighborhood_venues_withprice_df['StandardizedAvgPrice'] = standardized_price
+
+print(neighborhood_venues_withprice_df.shape)
+neighborhood_venues_withprice_df.head()
+
+# Using LinearRegression, we can get the list of coefficient correlations between each type of venue and the average price
+lreg = LinearRegression(normalize=True)
+
+X = neighborhood_venues_withprice_df.drop(columns=['Neighborhood', 'StandardizedAvgPrice'])
+y = neighborhood_venues_withprice_df['StandardizedAvgPrice']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+
+model = lreg.fit(X_train, y_train)
+
+# let's see how well Linear Regression fit the problem
+y_pred = lreg.predict(X_test)
+
+print('R2-score:', r2_score(y_test, y_pred)) # r2 score
+print('Mean Squared Error:', mean_squared_error(y_test, y_pred)) # mse
+
+print('Max positive coefs:', lreg.coef_[np.argsort(-lreg.coef_)[:10]])
+print('Venue types with most postive effect:', X.columns[np.argsort(-lreg.coef_)[:10]].values)
+print('Max negative coefs:', lreg.coef_[np.argsort(lreg.coef_)[:10]])
+print('Venue types with most negative effect:', X.columns[np.argsort(lreg.coef_)[:10]].values)
+coef_abs = abs(lreg.coef_)
+print('Min coefs:', lreg.coef_[np.argsort(coef_abs)[:10]])
+print('Venue types with least effect:', X.columns[np.argsort(coef_abs)[:10]].values)
