@@ -1,0 +1,3 @@
+Project Summary: Is the surrounding venues can effect the price of real estates? What kind of surrounding venues, and to what extend, can effect the price? Can we use the surrounding venue to estimate the value of an accommodation over the average price of one area? And to what degree of confidence? The data will be:
+Average price of 2-bedrooms condos in New York city's neighborhoods. (CityRealty) Venues surrounding each neighborhoods. (FourSquare API) Target audiences will be:
+Home buyers, who can roughly estimate the value of a target house over the average. Planners, who can decide which venues to place around their product, so that the price is maximized. Any normal person, who is wondering if that in-process building will effect his/her home's value.
